@@ -1,0 +1,161 @@
+---
+title: "scRNAseq analysis"
+author: "Li Sun"
+date: "6/28/2020"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(dplyr)
+library(Seurat)
+library(ggplot2)
+```
+
+
+## Data source
+single cell sequencing data is from this paper: Anoop P. Patel, Itay Tirosh, John J. Trombetta, Alex K. Shalek, Shawn M. Gillespie, Hiroaki Wakimoto, Daniel P. Cahill, Brian V. Nahed, William T. Curry, Robert L. Martuza, David N. Louis, Orit Rozenblatt-Rosen, Mario L. Suvà, Aviv Regev, and Bradley E. Bernstein Single-cell RNA-seq highlights intratumoral heterogeneity in primary glioblastoma Science. 2014 Jun 20; 344(6190): 1396–1401. doi: 10.1126/science.1254257.
+Human cancers are complex ecosystems composed of cells with distinct phenotypes, genotypes and epigenetic states, but current models do not adequately reflect tumor composition in patients. We used single cell RNA-seq to profile 430 cells from five primary glioblastomas, which we found to be inherently variable in their expression of diverse transcriptional programs related to oncogenic signaling, proliferation, complement/immune response and hypoxia. We also observed a continuum of stemness-related expression states that enabled us to identify putative regulators of stemness in vivo. Finally, we show that established glioblastoma subtype classifiers are variably expressed across individual cells within a tumor and demonstrate the potential prognostic implications of such intratumoral heterogeneity. Thus, we reveal previously unappreciated heterogeneity in diverse regulatory programs central to glioblastoma biology, prognosis, and therapy.
+Count coount matrix is downloaded here :https://singlecell.broadinstitute.org/single_cell/study/SCP10/glioblastoma-intra-tumor-heterogeneity#study-summary. This matrix is log2(TPM + 1). Seurat starts with count data or TPM.
+
+```{r cars}
+ltmpf <- 'Glioblastoma_expressed_genes.txt'
+l2tmp <- read.table(ltmpf, sep = '\t', header = TRUE, row.names = 1)
+# Convert log2(TPM + 1) to TPM
+count <- ceiling(2**l2tmp - 1)
+# Create Seurat object
+so <- CreateSeuratObject(count, project = 'Glioblastoma')
+so
+```
+
+## Preprocessing
+Mitocondria gene percentage. High mt-genes indicates dying or low quality celss.
+```{r}
+so[['percent.mt']] <- PercentageFeatureSet(so, pattern = '^MT-')
+VlnPlot(so, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3)
+```
+
+## Filtering
+Remove cells with more than 5% mt gene. nFeature seems reasonable and no filtering needed. The count slot and data slot at this point of time store the same 'sparse matrix' in dgCMatrix format.
+```{r}
+so <- subset(so, subset = percent.mt <5)
+```
+
+## Normalizing the data
+LogNormalize TPM. Scale factor = 10000. This step update data slot of seurat object. Feature counts for each cell are divided by the total counts for that cell and multiplied by the scale.factor. This is then natural-log transformed using log1p.
+```{r}
+so <- NormalizeData(so, normalization.method = 'LogNormalize', scale.factor = 10000)
+```
+
+## Identifying highly variable features (feature selection)
+This step is lowering number of features to a much smaller number while maintain most of the variations. To choose most informative/variable features/genes, we cannot directly order genes according to their variation accross cells. because this highly expressed genes normally have much larger variance comparing to lowly expressed genes. Thus the relationship between expression and variantion must be taken into account. 
+We use vst mehod described in https://www.biorxiv.org/content/biorxiv/early/2018/11/02/460147.full.pdf.
+```{r}
+so <- FindVariableFeatures(so, selection.method = 'vst', nfeatures = 2000)
+top10 <- head(VariableFeatures(so), 10)
+plot1 <- VariableFeaturePlot(so)
+plot2 <- LabelPoints(plot = plot1, points = top10, repel = TRUE)
+plot2
+```
+
+## Scaling data for dimension reduction
+Make sure columns (each feature) has mean 0 and variance 1. Scaled data is in normal matrix in slot @data@scale.data.
+```{r}
+all.genes <- rownames(so)
+so <- ScaleData(so, features = all.genes)
+```
+
+## Linear dimensional reduction
+PCA is used to reduce dimension of our normalized count data, only using 2000 top variable features. PCA results are stored in @reductions.
+VizDimLoadings is showing gene with highest absolute loadings with each PC.
+DimPlot is showing first two PCs in scatter plot with coloring according to @meta.data$orig,ident.
+DimHeatmap is ploted as following:
+1. For each PC, the top nFeatures genes with largest absolute loadings (half positive, half negative,when nFeatures is odd, it will only show nfeatures -1) were selected from @pca@feature.loadings.
+2. For the same PC, the top cells with largest embedding of that PC were chose. And then the scaled expression data of chosen genes and cells were ploted as Heatmap.
+```{r}
+so <- RunPCA(so, features = VariableFeatures(object = so))
+# Visualizing PCA results
+VizDimLoadings(so, dims = 1:2, reduction = 'pca')
+DimPlot(so, reduction = 'pca')
+DimHeatmap(so, cells=100, dims = 1:10, balanced = TRUE)
+```
+
+## Determine Dimensionality of the data
+To find the dimensionality or choose the optimal number of PCs, we could use JackStraw test.
+JackStraw is a method to test significance of association between each gene to any subset of PCs. Directly calculated association between gene expression across cells and any or any subset of "unit PCs" (the row vector of matrix V transpose from SVD) using F test (ANOVA or nested linear models) has 2 problem. Firstly, matrix V transpose is an noisy estimation of true latent variables. Secondly, PCA picks any variation in the dataset, including the noise, so it is overfitting. To deal with these problems, JackStraw method took a small subset of the data (1% is the default in Seurat), permute each selected rows. And the recalculate PCA and F statistics of the permuted rows. This process is repeated until sufficient number of null F statistics are obtained. Then all the F statistics of original un-permuted rows/genes were compared to this null distribution to get p values. Note, if you are permuting s rows each time, and for B times. Then you are estimating null distribution using s x B values. If you fix s x B = 10000, using s = 1 and B = 10000 gives you best estimation but slowest computation. On the other hand, if you use s = 10000 and B = 1, you get fastest computation time but most conservative biased estimation. JaskStraw results are stored in @reductions$pca@jackstraw.
+By using this method, you can get all the gene p values on each PC. In the regard of choosing number of top PCs for following analysis. We could choose the PCs with most low p values. This could be visualized by plotting QQ plot of gene wise p-values compared with a uniform distribution.
+ElbowPlot is a traditional method to visualize importance of each top PCs. It use the @stdev values in @reductions$pca.
+In general, determing dimensionality is subjective. Using more dimensions could help identifying rarer clusters, but it could also bring more noisy. However, author of Seurat believes higher dimension might be less worse than lower dimension. And it is a good practice to try several different dimensions in the following analysis and compare, if possible.
+```{r}
+so <- JackStraw(so)
+so <- ScoreJackStraw(so, dims = 1:20)
+JackStrawPlot(so, dims=1:20)
+ElbowPlot(so)
+```
+Choose 10 components.
+
+## Cluster cells
+After number of PCs chosen, for the following analysis, we use the 10 values to represent each cell.
+First, we want cluster all cells using these 10 PCs. 
+
+Following process are from [paper](https://academic.oup.com/bioinformatics/article/31/12/1974/214505). But it seems like different. 
+Clustering is done using Shared Nearest Neighbor (SNN). SNN is a secondary NN algorithm based on KNN. When KNN is done, SNN recalculate similarity between pair of points using their shared neighbors, as such:
+1. if there is no shared neighbor, there is no similarity/connection between two points.
+2. if there is shared neighbor, difference between k and the highest averaged ranking of the shared neighbors.
+Based on this sparse similarity matrix/graph, quasi-clique (some clusters could be overlapping) is found using some algorithm. Then significantly overlapping quasi-cliques are merged. Points within more than 1 clusters were reassinged to the 'best' cluster.
+```{r}
+so <- FindNeighbors(so, dims = 1:10)
+so <- FindClusters(so, resolution = 0.5)
+```
+
+## Non-linear dimension reduction
+There are multiple non-linear dimension reduction method. Such as tSNE, UMAP. These method are mainly used to visualize cell clusters in 2D space.These methods are desired because the clusters showed are normally coincident with clusters we get using SNN. 
+(Why these methods were not used in clustering?)
+Seurat author suggest using the same PCs as input as we did for above clustering process. 
+
+```{r}
+so <- RunUMAP(so, dims = 1:10)
+so <- RunTSNE(so, dims = 1:10)
+DimPlot(so, reduction = "umap")
+DimPlot(so, reduction = "tsne")
+```
+
+## Finding marker features of each cluster
+Differential expression is always 1 vs another, or pairwise. Thus, we will do a series of comparisons among all clusters. In seurat, this is done using function FindAllMarkers. 
+```{r}
+so.markers <- FindAllMarkers(so, min.pct = 0.25, logfc.threshold = 0.25)
+so.markers %>% group_by(cluster) %>% top_n(n = 2, wt = avg_logFC)
+```
+
+Visualizing feature expressions:
+```{r}
+VlnPlot(so, features = c("LANCL2", "SCG2"))
+VlnPlot(so, features = c("TF", "SAA1"))
+VlnPlot(so, features = c("FIGNL1", "TOP2A"))
+```
+
+Visualizing feature expressions on clustering:
+```{r}
+FeaturePlot(so, features = c("LANCL2", "SCG2", "TF", "SAA1", "FIGNL1", "TOP2A"), reduction='tsne')
+```
+
+
+Plot top 10 markers from each cluster
+```{r}
+top10 <- so.markers %>% group_by(cluster) %>% top_n(n = 10, wt = avg_logFC)
+DoHeatmap(so, features = top10$gene) + NoLegend()
+
+```
+
+## Assigning cell type identity to clusters
+This is knowledge-based process. Cannot be done solely by Seurat.But in this dataset, we have already known the cell types. So let's see how was our clustering job.
+```{r}
+table(so@meta.data$orig.ident, so@active.ident)
+new.cluster.ids <- c('MGH26(4)', 'MGH28', 'MGH31', 'MGH29', 'MGH30a', 'MGH30b')
+names(new.cluster.ids) <- levels(so)
+so <- RenameIdents(so, new.cluster.ids)
+DimPlot(so, reduction = "tsne", label=TRUE, pt.size = 2) + NoLegend()
+```
+
+Very accurately clustered!
+

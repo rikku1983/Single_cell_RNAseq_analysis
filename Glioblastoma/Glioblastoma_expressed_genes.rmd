@@ -14,9 +14,18 @@ library(ggplot2)
 
 
 ## Data source
-single cell sequencing data is from this paper: Anoop P. Patel, Itay Tirosh, John J. Trombetta, Alex K. Shalek, Shawn M. Gillespie, Hiroaki Wakimoto, Daniel P. Cahill, Brian V. Nahed, William T. Curry, Robert L. Martuza, David N. Louis, Orit Rozenblatt-Rosen, Mario L. Suvà, Aviv Regev, and Bradley E. Bernstein Single-cell RNA-seq highlights intratumoral heterogeneity in primary glioblastoma Science. 2014 Jun 20; 344(6190): 1396–1401. doi: 10.1126/science.1254257.
-Human cancers are complex ecosystems composed of cells with distinct phenotypes, genotypes and epigenetic states, but current models do not adequately reflect tumor composition in patients. We used single cell RNA-seq to profile 430 cells from five primary glioblastomas, which we found to be inherently variable in their expression of diverse transcriptional programs related to oncogenic signaling, proliferation, complement/immune response and hypoxia. We also observed a continuum of stemness-related expression states that enabled us to identify putative regulators of stemness in vivo. Finally, we show that established glioblastoma subtype classifiers are variably expressed across individual cells within a tumor and demonstrate the potential prognostic implications of such intratumoral heterogeneity. Thus, we reveal previously unappreciated heterogeneity in diverse regulatory programs central to glioblastoma biology, prognosis, and therapy.
-Count coount matrix is downloaded here :https://singlecell.broadinstitute.org/single_cell/study/SCP10/glioblastoma-intra-tumor-heterogeneity#study-summary. This matrix is log2(TPM + 1). Seurat starts with count data or TPM.
+### Original paper
+Anoop P. Patel, Itay Tirosh, John J. Trombetta, Alex K. Shalek, Shawn M. Gillespie, Hiroaki Wakimoto, Daniel P. Cahill, Brian V. Nahed, William T. Curry, Robert L. Martuza, David N. Louis, Orit Rozenblatt-Rosen, Mario L. Suvà, Aviv Regev, and Bradley E. Bernstein Single-cell RNA-seq highlights intratumoral heterogeneity in primary glioblastoma Science. 2014 Jun 20; 344(6190): 1396–1401. doi: 10.1126/science.1254257.
+
+### Original abstract
+"Human cancers are complex ecosystems composed of cells with distinct phenotypes, genotypes and epigenetic states, but current models do not adequately reflect tumor composition in patients. We used single cell RNA-seq to profile 430 cells from five primary glioblastomas, which we found to be inherently variable in their expression of diverse transcriptional programs related to oncogenic signaling, proliferation, complement/immune response and hypoxia. We also observed a continuum of stemness-related expression states that enabled us to identify putative regulators of stemness in vivo. Finally, we show that established glioblastoma subtype classifiers are variably expressed across individual cells within a tumor and demonstrate the potential prognostic implications of such intratumoral heterogeneity. Thus, we reveal previously unappreciated heterogeneity in diverse regulatory programs central to glioblastoma biology, prognosis, and therapy."
+
+### Single cell sample preparation
+Single cells transcriptome were generated using cell sorting and SMART-Seq from 6 freshly dissected human glioblastomas (MGH26,264,28, 29, 30, 31). MGH26, MGH30, and MGH31 have significant expression of EGFR. 96–192 cells were generated from each tumor sample and in total 672 cells were profiled. After filtering out low quality cells and genes with less coverage, 430 cells with around 6000 genes were kept. Count matrix is downloaded from [here](https://singlecell.broadinstitute.org/single_cell/study/SCP10/glioblastoma-intra-tumor-heterogeneity#study-summary). This matrix is log2(TPM + 1). Seurat starts with count data or TPM.
+
+### Purpose
+Purpose of this project is to re-analyze the single cell RNAseq data using Seurat workflow.
+
 
 ```{r cars}
 ltmpf <- 'Glioblastoma_expressed_genes.txt'
@@ -49,7 +58,7 @@ so <- NormalizeData(so, normalization.method = 'LogNormalize', scale.factor = 10
 
 ## Identifying highly variable features (feature selection)
 This step is lowering number of features to a much smaller number while maintain most of the variations. To choose most informative/variable features/genes, we cannot directly order genes according to their variation accross cells. because this highly expressed genes normally have much larger variance comparing to lowly expressed genes. Thus the relationship between expression and variantion must be taken into account. 
-We use vst mehod described in https://www.biorxiv.org/content/biorxiv/early/2018/11/02/460147.full.pdf.
+We use vst method described [here](https://www.biorxiv.org/content/biorxiv/early/2018/11/02/460147.full.pdf).
 ```{r}
 so <- FindVariableFeatures(so, selection.method = 'vst', nfeatures = 2000)
 top10 <- head(VariableFeatures(so), 10)
@@ -68,9 +77,9 @@ so <- ScaleData(so, features = all.genes)
 ## Linear dimensional reduction
 PCA is used to reduce dimension of our normalized count data, only using 2000 top variable features. PCA results are stored in @reductions.
 VizDimLoadings is showing gene with highest absolute loadings with each PC.
-DimPlot is showing first two PCs in scatter plot with coloring according to @meta.data$orig,ident.
+DimPlot is showing first two PCs in scatter plot with coloring according to @meta.data$orig.ident.
 DimHeatmap is ploted as following:
-1. For each PC, the top nFeatures genes with largest absolute loadings (half positive, half negative,when nFeatures is odd, it will only show nfeatures -1) were selected from @pca@feature.loadings.
+1. For each PC, the top nFeatures genes with largest absolute loadings (half positive, half negative, when nFeatures is odd, it will only show nfeatures -1) were selected from @pca@feature.loadings.
 2. For the same PC, the top cells with largest embedding of that PC were chose. And then the scaled expression data of chosen genes and cells were ploted as Heatmap.
 ```{r}
 so <- RunPCA(so, features = VariableFeatures(object = so))
@@ -98,7 +107,7 @@ Choose 10 components.
 After number of PCs chosen, for the following analysis, we use the 10 values to represent each cell.
 First, we want cluster all cells using these 10 PCs. 
 
-Following process are from [paper](https://academic.oup.com/bioinformatics/article/31/12/1974/214505). But it seems like different. 
+Following process should be based on [here](https://academic.oup.com/bioinformatics/article/31/12/1974/214505). But it seems different. 
 Clustering is done using Shared Nearest Neighbor (SNN). SNN is a secondary NN algorithm based on KNN. When KNN is done, SNN recalculate similarity between pair of points using their shared neighbors, as such:
 1. if there is no shared neighbor, there is no similarity/connection between two points.
 2. if there is shared neighbor, difference between k and the highest averaged ranking of the shared neighbors.
@@ -106,11 +115,19 @@ Based on this sparse similarity matrix/graph, quasi-clique (some clusters could 
 ```{r}
 so <- FindNeighbors(so, dims = 1:10)
 so <- FindClusters(so, resolution = 0.5)
+library(igraph)
+g = graph.adjacency(as.matrix(so@graphs$RNA_snn), mode="undirected",weighted=TRUE,diag=FALSE)
+# Simplfy the adjacency object
+g <- simplify(g, remove.multiple=TRUE, remove.loops=TRUE)
+cellgroup = factor(sapply(rownames(so@graphs$RNA_snn), function(x)strsplit(x,'_')[[1]][1]))
+library(RColorBrewer)
+coul  <- brewer.pal(6, "Set1")
+plot(g, vertex.size=5, vertex.color=coul[as.numeric(cellgroup)], vertex.label='',main = 'Visualize SNN')
+legend("bottomleft", legend=levels(cellgroup), col = coul, pch=19)
 ```
 
 ## Non-linear dimension reduction
-There are multiple non-linear dimension reduction method. Such as tSNE, UMAP. These method are mainly used to visualize cell clusters in 2D space.These methods are desired because the clusters showed are normally coincident with clusters we get using SNN. 
-(Why these methods were not used in clustering?)
+There are multiple non-linear dimension reduction method. Such as tSNE, UMAP. These method are mainly used to visualize cell clusters in 2D space.These methods are desired because of superior visualization character in 2D space. Such as tSNE, which conserve local relationships while increases distances of larger distances. This is a desired behavior for visualizing high dimensional data in low dimension. Also, the clusters showed are normally coincident with clusters we get using SNN. (I don't understand yet why these methods were not used in clustering?)
 Seurat author suggest using the same PCs as input as we did for above clustering process. 
 
 ```{r}
@@ -121,10 +138,10 @@ DimPlot(so, reduction = "tsne")
 ```
 
 ## Finding marker features of each cluster
-Differential expression is always 1 vs another, or pairwise. Thus, we will do a series of comparisons among all clusters. In seurat, this is done using function FindAllMarkers. 
+Differential expression is always 1 vs another, or pairwise. Thus, we will do a series of comparisons among all clusters. In Seurat, this is done using function FindAllMarkers.
 ```{r}
 so.markers <- FindAllMarkers(so, min.pct = 0.25, logfc.threshold = 0.25)
-so.markers %>% group_by(cluster) %>% top_n(n = 2, wt = avg_logFC)
+so.markers %>% group_by(cluster) %>% top_n(n = 2, wt = avg_log2FC)
 ```
 
 Visualizing feature expressions:
@@ -142,20 +159,22 @@ FeaturePlot(so, features = c("LANCL2", "SCG2", "TF", "SAA1", "FIGNL1", "TOP2A"),
 
 Plot top 10 markers from each cluster
 ```{r}
-top10 <- so.markers %>% group_by(cluster) %>% top_n(n = 10, wt = avg_logFC)
+top10 <- so.markers %>% group_by(cluster) %>% top_n(n = 10, wt = avg_log2FC)
 DoHeatmap(so, features = top10$gene) + NoLegend()
 
 ```
 
 ## Assigning cell type identity to clusters
-This is knowledge-based process. Cannot be done solely by Seurat.But in this dataset, we have already known the cell types. So let's see how was our clustering job.
+This is knowledge-based process. Cannot be done solely by Seurat.But in this dataset, we have already known the cell types (cell origin in our case). So let's see how was our clustering job.
 ```{r}
 table(so@meta.data$orig.ident, so@active.ident)
+# It looks good
+# lets change give the SNN found groups a name based on above table results
 new.cluster.ids <- c('MGH26(4)', 'MGH28', 'MGH31', 'MGH29', 'MGH30a', 'MGH30b')
 names(new.cluster.ids) <- levels(so)
 so <- RenameIdents(so, new.cluster.ids)
 DimPlot(so, reduction = "tsne", label=TRUE, pt.size = 2) + NoLegend()
 ```
 
-Very accurately clustered!
+This is a run-through of most Seurat workflow of processing and analyzing single cell RNAseq dataset from TPM count matrix. More to come (slingshot)!
 
